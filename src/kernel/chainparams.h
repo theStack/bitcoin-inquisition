@@ -192,14 +192,4 @@ protected:
     ChainTxData chainTxData;
 };
 
-inline int32_t CalculateActivateVersion(uint16_t bip, uint8_t bip_version)
-{
-    return (VERSIONBITS_TOP_ACTIVE | (int32_t{bip} << 8) | bip_version);
-}
-
-inline int32_t CalculateAbandonVersion(int bip, int bip_version)
-{
-    return (VERSIONBITS_TOP_ABANDON | (int32_t{bip} << 8) | bip_version);
-}
-
 #endif // BITCOIN_KERNEL_CHAINPARAMS_H
