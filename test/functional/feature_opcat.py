@@ -22,21 +22,30 @@ from test_framework.messages import (
 from test_framework.p2p import P2PInterface
 from test_framework.script import (
     CScript,
-    OP_CAT,
-    OP_EQUAL,
     OP_2,
+    OP_CAT,
+    OP_CHECKSIG,
     OP_DUP,
+    OP_EQUAL,
+    OP_EQUALVERIFY,
+    OP_FROMALTSTACK,
+    OP_OVER,
+    OP_SHA256,
+    OP_SWAP,
+    OP_TOALTSTACK,
+    SIGHASH_DEFAULT,
+    TaprootSignatureHash,
     taproot_construct,
 )
 from test_framework.script_util import script_to_p2sh_script
-from test_framework.key import ECKey, compute_xonly_pubkey
+from test_framework.key import ECKey, H_POINT, compute_xonly_pubkey, sign_schnorr
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet import MiniWallet, MiniWalletMode
 from decimal import Decimal
 import random
 from io import BytesIO
-from test_framework.address import script_to_p2sh
+from test_framework.address import output_key_to_p2tr, script_to_p2sh
 
 DISCOURAGED_ERROR = (
     "non-mandatory-script-verify-flag (NOPx reserved for soft-fork upgrades)"
@@ -108,6 +117,68 @@ class CatTest(BitcoinTestFramework):
             self.log.debug("Reject Reason: [%s]", reason)
         assert_equal(self.nodes[0].getbestblockhash(), h)
         return h
+
+    def test_example_faucat(self):
+        """PoW-limited faucet using OP_CAT (idea by ajtowns, see
+           https://twitter.com/ajtowns/status/1785842090607591712).
+
+           To spend a fauCAT output, provide a signature S together with
+           a nonce S, such that sha256(N || S) ends with a certain number
+           of zero-bytes. The PoW-hash has to be also provided in two
+           parts (non-zeros part HA, zeros part HB).
+
+           Witness stack for spending:
+                - P (public key)
+                - S (signature)
+                - N (nonce string)
+                - HA (core part of hash)
+                - HB (zero-bytes-postfix-part of hash)
+
+           For demo purposes and to keep the script simple, a fixed-length
+           zero-postfix of 2 bytes is required here, and there is no delay on
+           when the funds can be spent.
+        """
+        # construct taproot script for faucat
+        faucat_script = CScript([
+            OP_DUP, b'\x00\x00', OP_EQUALVERIFY,                          # check that HB is all-zeros
+            OP_CAT, OP_TOALTSTACK,                                        # save H = HA || HB
+            OP_OVER, OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
+            OP_SWAP, OP_CHECKSIG,                                         # verify signature
+        ])
+        faucat_tapinfo = taproot_construct(bytes.fromhex(H_POINT), [("only-path", faucat_script)])
+        faucat_spk = faucat_tapinfo.scriptPubKey
+        faucat_address = output_key_to_p2tr(faucat_tapinfo.output_pubkey)
+
+        # fund faucat
+        wallet = MiniWallet(self.nodes[0])
+        self.generate(wallet, 200)
+        txid, vout = wallet.send_to(from_node=self.nodes[0], scriptPubKey=faucat_spk, amount=500000)
+
+        # drain faucat
+        drain_tx = CTransaction()
+        drain_tx.vin = [CTxIn(COutPoint(int(txid, 16), vout))]
+        drain_tx.vout = [CTxOut(400000, random_p2sh())]
+
+        privkey = ECKey()
+        privkey.generate(True)
+        pubkey, _ = compute_xonly_pubkey(privkey.get_bytes())
+        signature_hash = TaprootSignatureHash(drain_tx, [CTxOut(500000, faucat_spk)], SIGHASH_DEFAULT, 0, True, faucat_script)
+        signature = sign_schnorr(privkey.get_bytes(), signature_hash)
+        nonce_num = 0
+        while True:  # grind nonce
+            nonce_bytes = nonce_num.to_bytes(4, 'little')
+            pow_hash = sha256(nonce_bytes + signature)
+            if pow_hash.endswith(b'\x00\x00'):
+                break
+            nonce_num += 1
+
+        drain_tx.wit.vtxinwit = [CTxInWitness()]
+        drain_tx.wit.vtxinwit[0].scriptWitness.stack = [
+            pubkey, signature, nonce_bytes, pow_hash[:-2], pow_hash[-2:],
+            faucat_script, bytes([0xc0]) + bytes.fromhex(H_POINT),
+        ]
+        self.nodes[0].sendrawtransaction(drain_tx.serialize().hex())
+
 
     def run_test(self):
         # The goal is to test a number of circumstances and combinations of parameters. Roughly:
@@ -336,6 +407,8 @@ class CatTest(BitcoinTestFramework):
         self.log.info(
             "allowed by consensus, disallowed by relay policy"
         )
+
+        self.test_example_faucat()
 
 
 if __name__ == "__main__":
