@@ -139,15 +139,19 @@ class CatTest(BitcoinTestFramework):
            zero-postfix of 2 bytes is required here, and there is no delay on
            when the funds can be spent.
         """
-        # construct taproot script for faucat
-        faucat_script = CScript([
-            OP_DUP, b'\x00\x00', OP_EQUALVERIFY,                          # check that HB is all-zeros
-            OP_CAT, OP_TOALTSTACK,                                        # save H = HA || HB
-            OP_OVER, OP_SIZE, bytes([64]), OP_EQUALVERIFY,                # grab signature, check it's 64 bytes, no funny business!
-            OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,           # check PoW, i.e. sha256(N || S) == H
-            OP_SWAP, OP_SIZE, bytes([32]), OP_EQUALVERIFY,                # check pubkey is 32 bytes, no funny business!
-            OP_CHECKSIG,                                                  # verify signature
-        ])
+        def build_faucat_script(n):
+            # TODO: take use of difficulty n
+
+            # construct taproot script for faucat
+            return CScript([
+                OP_DUP, b'\x00\x00', OP_EQUALVERIFY,                 # check that HB is all-zeros
+                OP_CAT, OP_TOALTSTACK,                               # save H = HA || HB
+                OP_OVER, OP_SIZE, bytes([64]), OP_EQUALVERIFY,       # grab signature, check it's 64 bytes, no funny business!
+                OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
+                OP_SWAP, OP_SIZE, bytes([32]), OP_EQUALVERIFY,       # check pubkey is 32 bytes, no funny business!
+                OP_CHECKSIG,                                         # verify signature
+            ])
+        faucat_script = build_faucat_script(0)
         faucat_tapinfo = taproot_construct(bytes.fromhex(H_POINT), [("only-path", faucat_script)])
         faucat_spk = faucat_tapinfo.scriptPubKey
         faucat_address = output_key_to_p2tr(faucat_tapinfo.output_pubkey)
