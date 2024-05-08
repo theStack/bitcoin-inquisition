@@ -31,6 +31,7 @@ from test_framework.script import (
     OP_FROMALTSTACK,
     OP_OVER,
     OP_SHA256,
+    OP_SIZE,
     OP_SWAP,
     OP_TOALTSTACK,
     SIGHASH_DEFAULT,
@@ -128,8 +129,8 @@ class CatTest(BitcoinTestFramework):
            parts (non-zeros part HA, zeros part HB).
 
            Witness stack for spending:
-                - P (public key)
-                - S (signature)
+                - P (x-only public key [32 bytes])
+                - S (signature [64 bytes, i.e. implicit SIGHASH_ALL])
                 - N (nonce string)
                 - HA (core part of hash)
                 - HB (zero-bytes-postfix-part of hash)
@@ -142,8 +143,10 @@ class CatTest(BitcoinTestFramework):
         faucat_script = CScript([
             OP_DUP, b'\x00\x00', OP_EQUALVERIFY,                          # check that HB is all-zeros
             OP_CAT, OP_TOALTSTACK,                                        # save H = HA || HB
-            OP_OVER, OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
-            OP_SWAP, OP_CHECKSIG,                                         # verify signature
+            OP_OVER, OP_SIZE, bytes([64]), OP_EQUALVERIFY,                # grab signature, check it's 64 bytes, no funny business!
+            OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,           # check PoW, i.e. sha256(N || S) == H
+            OP_SWAP, OP_SIZE, bytes([32]), OP_EQUALVERIFY,                # check pubkey is 32 bytes, no funny business!
+            OP_CHECKSIG,                                                  # verify signature
         ])
         faucat_tapinfo = taproot_construct(bytes.fromhex(H_POINT), [("only-path", faucat_script)])
         faucat_spk = faucat_tapinfo.scriptPubKey
