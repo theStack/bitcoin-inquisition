@@ -29,6 +29,7 @@ from test_framework.script import (
     OP_EQUAL,
     OP_EQUALVERIFY,
     OP_FROMALTSTACK,
+    OP_NUMEQUALVERIFY,
     OP_OVER,
     OP_SHA256,
     OP_SIZE,
@@ -146,9 +147,9 @@ class CatTest(BitcoinTestFramework):
             return CScript([
                 OP_DUP, b'\x00\x00', OP_EQUALVERIFY,                 # check that HB is all-zeros
                 OP_CAT, OP_TOALTSTACK,                               # save H = HA || HB
-                OP_OVER, OP_SIZE, bytes([64]), OP_EQUALVERIFY,       # grab signature, check it's 64 bytes, no funny business!
+                OP_OVER, OP_SIZE, 64, OP_NUMEQUALVERIFY,             # grab signature, check it's 64 bytes, no funny business!
                 OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
-                OP_SWAP, OP_SIZE, bytes([32]), OP_EQUALVERIFY,       # check pubkey is 32 bytes, no funny business!
+                OP_SWAP, OP_SIZE, 32, OP_NUMEQUALVERIFY,             # check pubkey is 32 bytes, no funny business!
                 OP_CHECKSIG,                                         # verify signature
             ])
         faucat_script = build_faucat_script(0)
@@ -182,7 +183,7 @@ class CatTest(BitcoinTestFramework):
         drain_tx.wit.vtxinwit = [CTxInWitness()]
         drain_tx.wit.vtxinwit[0].scriptWitness.stack = [
             pubkey, signature, nonce_bytes, pow_hash[:-2], pow_hash[-2:],
-            faucat_script, bytes([0xc0]) + bytes.fromhex(H_POINT),
+            faucat_script, bytes([0xc0 + faucat_tapinfo.negflag]) + bytes.fromhex(H_POINT),
         ]
         self.nodes[0].sendrawtransaction(drain_tx.serialize().hex())
 
