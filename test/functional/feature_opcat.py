@@ -24,17 +24,22 @@ from test_framework.script import (
     CScript,
     OP_2,
     OP_CAT,
+    OP_CHECKSEQUENCEVERIFY,
     OP_CHECKSIG,
+    OP_DROP,
     OP_DUP,
     OP_EQUAL,
     OP_EQUALVERIFY,
     OP_FROMALTSTACK,
+    OP_GREATERTHANOREQUAL,
+    OP_LESSTHANOREQUAL,
     OP_NUMEQUALVERIFY,
     OP_OVER,
     OP_SHA256,
     OP_SIZE,
     OP_SWAP,
     OP_TOALTSTACK,
+    OP_VERIFY,
     SIGHASH_DEFAULT,
     TaprootSignatureHash,
     taproot_construct,
@@ -127,32 +132,41 @@ class CatTest(BitcoinTestFramework):
            To spend a fauCAT output, provide a signature S together with
            a nonce S, such that sha256(N || S) ends with a certain number
            of zero-bytes. The PoW-hash has to be also provided in two
-           parts (non-zeros part HA, zeros part HB).
+           parts (non-zeros part HA, zeros parts HB and HC).
 
            Witness stack for spending:
                 - P (x-only public key [32 bytes])
                 - S (signature [64 bytes, i.e. implicit SIGHASH_ALL])
                 - N (nonce string)
                 - HA (core part of hash)
-                - HB (zero-bytes-postfix-part of hash)
-
-           For demo purposes and to keep the script simple, a fixed-length
-           zero-postfix of 2 bytes is required here, and there is no delay on
-           when the funds can be spent.
+                - HB (split byte of hash [empty if trailing zeros are a multiple of 8])
+                - HC (zero-bytes-postfix-part of hash)
         """
         def build_faucat_script(n):
-            # TODO: take use of difficulty n
+            assert 0 <= n < 47
+            delay = (47 - n) * 10
+            zeros = b'\x00' * (n // 8)
+            # TODO: on mainnet, treat n == 0 as 32 leading zero-bits,
+            # i.e. multiply with `(n // 8 + 4)` instead
+            prefix = [0, 127, 63, 31, 15, 7, 3, 1][n%8]
 
             # construct taproot script for faucat
             return CScript([
-                OP_DUP, b'\x00\x00', OP_EQUALVERIFY,                 # check that HB is all-zeros
-                OP_CAT, OP_TOALTSTACK,                               # save H = HA || HB
+                #delay, OP_CHECKSEQUENCEVERIFY, OP_DROP,             # check delay (TODO: activate and test this...)
+                OP_OVER, prefix, OP_LESSTHANOREQUAL, OP_VERIFY,      # check prefix is below target
+                OP_OVER, OP_SIZE, 1, OP_LESSTHANOREQUAL, OP_VERIFY,  # prefix must be zero or one bytes and
+                         0, OP_GREATERTHANOREQUAL, OP_VERIFY,        # positive, no funny business!
+                OP_DUP, zeros, OP_EQUALVERIFY,                       # check that HC is all-zeros
+                OP_CAT, OP_CAT, OP_TOALTSTACK,                       # save H = HA || HB || HC
                 OP_OVER, OP_SIZE, 64, OP_NUMEQUALVERIFY,             # grab signature, check it's 64 bytes, no funny business!
                 OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
                 OP_SWAP, OP_SIZE, 32, OP_NUMEQUALVERIFY,             # check pubkey is 32 bytes, no funny business!
                 OP_CHECKSIG,                                         # verify signature
             ])
-        faucat_script = build_faucat_script(0)
+        # TODO: properly test pow success/fails with all difficulties that lead to a solution in
+        # reasonable time (let's say, maximum a few seconds on a common machine)
+        # TODO: construct taptree with all difficulty levels (moar taproot fun \o/)
+        faucat_script = build_faucat_script(17)
         faucat_tapinfo = taproot_construct(bytes.fromhex(H_POINT), [("only-path", faucat_script)])
         faucat_spk = faucat_tapinfo.scriptPubKey
         faucat_address = output_key_to_p2tr(faucat_tapinfo.output_pubkey)
@@ -176,13 +190,17 @@ class CatTest(BitcoinTestFramework):
         while True:  # grind nonce
             nonce_bytes = nonce_num.to_bytes(4, 'little')
             pow_hash = sha256(nonce_bytes + signature)
-            if pow_hash.endswith(b'\x00\x00'):
+            if pow_hash.endswith(b'\x00\x00') and pow_hash[-3] <= 127:
                 break
             nonce_num += 1
 
+        h_a = pow_hash[:-3]
+        h_b = bytes([pow_hash[-3]]) if pow_hash[-3] > 0 else b''
+        h_c = pow_hash[-2:] if pow_hash[-3] > 0 else pow_hash[-3:]
+
         drain_tx.wit.vtxinwit = [CTxInWitness()]
         drain_tx.wit.vtxinwit[0].scriptWitness.stack = [
-            pubkey, signature, nonce_bytes, pow_hash[:-2], pow_hash[-2:],
+            pubkey, signature, nonce_bytes, h_a, h_b, h_c,
             faucat_script, bytes([0xc0 + faucat_tapinfo.negflag]) + bytes.fromhex(H_POINT),
         ]
         self.nodes[0].sendrawtransaction(drain_tx.serialize().hex())
