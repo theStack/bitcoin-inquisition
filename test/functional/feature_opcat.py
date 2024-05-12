@@ -164,6 +164,9 @@ class CatTest(BitcoinTestFramework):
 
             # construct taproot script for faucat
             return CScript([
+                OP_DUP, 0, OP_GTE, OP_VERIFY,  # verify range of D
+                OP_DUP, 64, OP_LT, OP_VERIFY,  # (must be in [0,63])
+
                 OP_DUP,                  # -> D
                 OP_DUP, OP_ADD,          # -> 2*D
                 OP_DUP, OP_DUP, OP_ADD,  # -> 2*D, 4*D
