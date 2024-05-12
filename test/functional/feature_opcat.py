@@ -25,6 +25,7 @@ from test_framework.script import (
     CScriptNum,
     OP_1SUB,
     OP_2,
+    OP_ABS,
     OP_ADD,
     OP_CAT,
     OP_CHECKSEQUENCEVERIFY,
@@ -38,6 +39,7 @@ from test_framework.script import (
     OP_FROMALTSTACK,
     OP_GREATERTHANOREQUAL,
     OP_IF,
+    OP_LESSTHAN,
     OP_LESSTHANOREQUAL,
     OP_NUMEQUAL,
     OP_NUMEQUALVERIFY,
@@ -156,7 +158,7 @@ class CatTest(BitcoinTestFramework):
             # some opcode shortcuts
             OP_CSV = OP_CHECKSEQUENCEVERIFY
             OP_GTE = OP_GREATERTHANOREQUAL
-            OP_LTE = OP_LESSTHANOREQUAL
+            OP_LT  = OP_LESSTHAN
             OP_FAS = OP_FROMALTSTACK
             OP_TAS = OP_TOALTSTACK
 
@@ -176,24 +178,25 @@ class CatTest(BitcoinTestFramework):
                 OP_DUP, 16, OP_GTE, OP_IF, OP_FAS, b'\x00'*2, OP_CAT, OP_TAS, 16, OP_SUB, OP_ENDIF,
                 OP_DUP,  8, OP_GTE, OP_IF, OP_FAS, b'\x00'*1, OP_CAT, OP_TAS,  8, OP_SUB, OP_ENDIF,
 
-                # difficulty is now in range [0,7]; 0 means below 0x80, 1 means below 0x40,
-                # 2 means below 0x20, ..., 6 means below 0x02, 7 means below 0x01 (=> 0x00)
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF, 127, OP_TAS, OP_ENDIF, OP_1SUB,
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF,  63, OP_TAS, OP_ENDIF, OP_1SUB,
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF,  31, OP_TAS, OP_ENDIF, OP_1SUB,
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF,  15, OP_TAS, OP_ENDIF, OP_1SUB,
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF,   7, OP_TAS, OP_ENDIF, OP_1SUB,
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF,   3, OP_TAS, OP_ENDIF, OP_1SUB,
-                OP_DUP, 0, OP_NUMEQUAL, OP_IF,   1, OP_TAS, OP_ENDIF, OP_1SUB,
-
-                # check postfix is below target
-                0, OP_GTE, OP_IF,
-                    # accept 00-byte directly to avoid dealing with negatives
-                    OP_SIZE, 1, OP_NUMEQUALVERIFY,
-                    OP_DUP, b'\x00', OP_EQUALVERIFY,
+                # difficulty is now in range [0,7]; 0 means there's no check on H_B necessary,
+                # 1 means below 0x80, 2 means below 0x40, ..., 6 means below 0x04, 7 means below 0x02
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,
+                    OP_DROP,
                 OP_ELSE,
-                    OP_SIZE, 1, OP_NUMEQUALVERIFY,
-                    OP_DUP, OP_FAS, OP_LTE, OP_VERIFY,
+                    OP_1SUB,
+                    OP_DUP, 0, OP_NUMEQUAL, OP_IF, 0x80, OP_TAS, OP_ENDIF, OP_1SUB,
+                    OP_DUP, 0, OP_NUMEQUAL, OP_IF, 0x40, OP_TAS, OP_ENDIF, OP_1SUB,
+                    OP_DUP, 0, OP_NUMEQUAL, OP_IF, 0x20, OP_TAS, OP_ENDIF, OP_1SUB,
+                    OP_DUP, 0, OP_NUMEQUAL, OP_IF, 0x10, OP_TAS, OP_ENDIF, OP_1SUB,
+                    OP_DUP, 0, OP_NUMEQUAL, OP_IF, 0x08, OP_TAS, OP_ENDIF, OP_1SUB,
+                    OP_DUP, 0, OP_NUMEQUAL, OP_IF, 0x04, OP_TAS, OP_ENDIF, OP_1SUB,
+                            0, OP_NUMEQUAL, OP_IF, 0x02, OP_TAS, OP_ENDIF,
+
+                    # check last non-zero-byte is below target
+                    OP_SIZE, 1, OP_NUMEQUALVERIFY,          # H_B has to be exactly one byte, no funny business!
+                    OP_DUP, 0, OP_LT,                       # convert H_B to its CScriptNum equivalent
+                    OP_IF, OP_ABS, 0x80, OP_ADD, OP_ENDIF,  # (0x80-0xff are treated as signed numbers -0 to -127)
+                    OP_DUP, OP_FAS, OP_LT, OP_VERIFY,
                 OP_ENDIF,
 
                 OP_FAS, OP_CAT, OP_CAT, OP_TAS,             # save H = HA || HB || <zero-byte-postfix>
@@ -216,7 +219,7 @@ class CatTest(BitcoinTestFramework):
 
         # drain faucat
         drain_tx = CTransaction()
-        drain_tx.vin = [CTxIn(COutPoint(int(txid, 16), vout), nSequence=480)]
+        drain_tx.vin = [CTxIn(COutPoint(int(txid, 16), vout), nSequence=470)]
         drain_tx.vout = [CTxOut(400000, random_p2sh())]
 
         privkey = ECKey()
@@ -228,21 +231,20 @@ class CatTest(BitcoinTestFramework):
         while True:  # grind nonce
             nonce_bytes = nonce_num.to_bytes(4, 'little')
             pow_hash = sha256(nonce_bytes + signature)
-            if pow_hash.endswith(b'\x00\x00') and pow_hash[-3] <= 127:
+            if pow_hash.endswith(b'\x00\x00') and pow_hash[-3] < 0x80:
                 break
             nonce_num += 1
 
         h_a = pow_hash[:-3]
         h_b = bytes([pow_hash[-3]])
-        print(f'h_b ==> {h_b.hex()}')
-        difficulty = bytes([16])
+        difficulty = bytes([17])
 
         drain_tx.wit.vtxinwit = [CTxInWitness()]
         drain_tx.wit.vtxinwit[0].scriptWitness.stack = [
             pubkey, signature, nonce_bytes, h_a, h_b, difficulty,
             faucat_script, bytes([0xc0 + faucat_tapinfo.negflag]) + bytes.fromhex(H_POINT),
         ]
-        self.generate(wallet, 480)
+        self.generate(wallet, 470)
         self.nodes[0].sendrawtransaction(drain_tx.serialize().hex())
 
 
