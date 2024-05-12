@@ -22,21 +22,29 @@ from test_framework.messages import (
 from test_framework.p2p import P2PInterface
 from test_framework.script import (
     CScript,
+    CScriptNum,
+    OP_1SUB,
     OP_2,
+    OP_ADD,
     OP_CAT,
     OP_CHECKSEQUENCEVERIFY,
     OP_CHECKSIG,
     OP_DROP,
     OP_DUP,
+    OP_ELSE,
+    OP_ENDIF,
     OP_EQUAL,
     OP_EQUALVERIFY,
     OP_FROMALTSTACK,
     OP_GREATERTHANOREQUAL,
+    OP_IF,
     OP_LESSTHANOREQUAL,
+    OP_NUMEQUAL,
     OP_NUMEQUALVERIFY,
     OP_OVER,
     OP_SHA256,
     OP_SIZE,
+    OP_SUB,
     OP_SWAP,
     OP_TOALTSTACK,
     OP_VERIFY,
@@ -127,46 +135,76 @@ class CatTest(BitcoinTestFramework):
 
     def test_example_faucat(self):
         """PoW-limited faucet using OP_CAT (idea by ajtowns, see
-           https://twitter.com/ajtowns/status/1785842090607591712).
+           https://twitter.com/ajtowns/status/1785842090607591712,
+           https://github.com/theStack/bitcoin-inquisition/issues/1#issue-2282650357 and
+           https://github.com/theStack/bitcoin-inquisition/issues/1#issuecomment-2102898015).
 
            To spend a fauCAT output, provide a signature S together with
-           a nonce S, such that sha256(N || S) ends with a certain number
-           of zero-bytes. The PoW-hash has to be also provided in two
-           parts (non-zeros part HA, zeros parts HB and HC).
+           a nonce S, such that sha256(N || S) ends with a certain count of
+           zero-bits (the "difficulty" D). The non-zero-bytes part of the
+           PoW-hash has to be provided in two (core part HA, last non-zero byte HB).
 
            Witness stack for spending:
                 - P (x-only public key [32 bytes])
                 - S (signature [64 bytes, i.e. implicit SIGHASH_ALL])
                 - N (nonce string)
                 - HA (core part of hash)
-                - HB (split byte of hash [empty if trailing zeros are a multiple of 8])
-                - HC (zero-bytes-postfix-part of hash)
+                - HB (last non-zero byte of hash)
+                - D (difficulty, number of trailing zero-bits [CScriptNum in range 0-63])
         """
-        def build_faucat_script(n):
-            assert 0 <= n < 47
-            delay = (47 - n) * 10
-            zeros = b'\x00' * (n // 8)
-            # TODO: on mainnet, treat n == 0 as 32 leading zero-bits,
-            # i.e. multiply with `(n // 8 + 4)` instead
-            prefix = [0, 127, 63, 31, 15, 7, 3, 1][n%8]
+        def build_faucat_script():
+            # some opcode shortcuts
+            OP_CSV = OP_CHECKSEQUENCEVERIFY
+            OP_GTE = OP_GREATERTHANOREQUAL
+            OP_LTE = OP_LESSTHANOREQUAL
+            OP_FAS = OP_FROMALTSTACK
+            OP_TAS = OP_TOALTSTACK
 
             # construct taproot script for faucat
             return CScript([
-                #delay, OP_CHECKSEQUENCEVERIFY, OP_DROP,             # check delay (TODO: activate and test this...)
-                OP_OVER, prefix, OP_LESSTHANOREQUAL, OP_VERIFY,      # check prefix is below target
-                OP_OVER, OP_SIZE, 1, OP_LESSTHANOREQUAL, OP_VERIFY,  # prefix must be zero or one bytes and
-                         0, OP_GREATERTHANOREQUAL, OP_VERIFY,        # positive, no funny business!
-                OP_DUP, zeros, OP_EQUALVERIFY,                       # check that HC is all-zeros
-                OP_CAT, OP_CAT, OP_TOALTSTACK,                       # save H = HA || HB || HC
-                OP_OVER, OP_SIZE, 64, OP_NUMEQUALVERIFY,             # grab signature, check it's 64 bytes, no funny business!
-                OP_CAT, OP_SHA256, OP_FROMALTSTACK, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
-                OP_SWAP, OP_SIZE, 32, OP_NUMEQUALVERIFY,             # check pubkey is 32 bytes, no funny business!
-                OP_CHECKSIG,                                         # verify signature
+                OP_DUP,                  # -> D
+                OP_DUP, OP_ADD,          # -> 2*D
+                OP_DUP, OP_DUP, OP_ADD,  # -> 2*D, 4*D
+                OP_DUP, OP_ADD,          # -> 2*D, 8*D
+                OP_ADD,                  # -> 10*D
+                640, OP_SWAP, OP_SUB,    # -> (640 - 10*D)
+                OP_CSV, OP_DROP,         # check delay
+
+                # create expected zero-bytes-postfix part of hash (D // 8 bytes)
+                b'', OP_TAS,
+                OP_DUP, 32, OP_GTE, OP_IF, OP_FAS, b'\x00'*4, OP_CAT, OP_TAS, 32, OP_SUB, OP_ENDIF,
+                OP_DUP, 16, OP_GTE, OP_IF, OP_FAS, b'\x00'*2, OP_CAT, OP_TAS, 16, OP_SUB, OP_ENDIF,
+                OP_DUP,  8, OP_GTE, OP_IF, OP_FAS, b'\x00'*1, OP_CAT, OP_TAS,  8, OP_SUB, OP_ENDIF,
+
+                # difficulty is now in range [0,7]; 0 means below 0x80, 1 means below 0x40,
+                # 2 means below 0x20, ..., 6 means below 0x02, 7 means below 0x01 (=> 0x00)
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF, 127, OP_TAS, OP_ENDIF, OP_1SUB,
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,  63, OP_TAS, OP_ENDIF, OP_1SUB,
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,  31, OP_TAS, OP_ENDIF, OP_1SUB,
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,  15, OP_TAS, OP_ENDIF, OP_1SUB,
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,   7, OP_TAS, OP_ENDIF, OP_1SUB,
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,   3, OP_TAS, OP_ENDIF, OP_1SUB,
+                OP_DUP, 0, OP_NUMEQUAL, OP_IF,   1, OP_TAS, OP_ENDIF, OP_1SUB,
+
+                # check postfix is below target
+                0, OP_GTE, OP_IF,
+                    # accept 00-byte directly to avoid dealing with negatives
+                    OP_SIZE, 1, OP_NUMEQUALVERIFY,
+                    OP_DUP, b'\x00', OP_EQUALVERIFY,
+                OP_ELSE,
+                    OP_SIZE, 1, OP_NUMEQUALVERIFY,
+                    OP_DUP, OP_FAS, OP_LTE, OP_VERIFY,
+                OP_ENDIF,
+
+                OP_FAS, OP_CAT, OP_CAT, OP_TAS,             # save H = HA || HB || <zero-byte-postfix>
+                OP_OVER, OP_SIZE, 64, OP_NUMEQUALVERIFY,    # grab signature, check it's 64 bytes, no funny business!
+                OP_CAT, OP_SHA256, OP_FAS, OP_EQUALVERIFY,  # check PoW, i.e. sha256(N || S) == H
+                OP_SWAP, OP_SIZE, 32, OP_NUMEQUALVERIFY,    # check pubkey is 32 bytes, no funny business!
+                OP_CHECKSIG,                                # verify signature
             ])
         # TODO: properly test pow success/fails with all difficulties that lead to a solution in
         # reasonable time (let's say, maximum a few seconds on a common machine)
-        # TODO: construct taptree with all difficulty levels (moar taproot fun \o/)
-        faucat_script = build_faucat_script(17)
+        faucat_script = build_faucat_script()
         faucat_tapinfo = taproot_construct(bytes.fromhex(H_POINT), [("only-path", faucat_script)])
         faucat_spk = faucat_tapinfo.scriptPubKey
         faucat_address = output_key_to_p2tr(faucat_tapinfo.output_pubkey)
@@ -178,7 +216,7 @@ class CatTest(BitcoinTestFramework):
 
         # drain faucat
         drain_tx = CTransaction()
-        drain_tx.vin = [CTxIn(COutPoint(int(txid, 16), vout))]
+        drain_tx.vin = [CTxIn(COutPoint(int(txid, 16), vout), nSequence=480)]
         drain_tx.vout = [CTxOut(400000, random_p2sh())]
 
         privkey = ECKey()
@@ -195,14 +233,16 @@ class CatTest(BitcoinTestFramework):
             nonce_num += 1
 
         h_a = pow_hash[:-3]
-        h_b = bytes([pow_hash[-3]]) if pow_hash[-3] > 0 else b''
-        h_c = pow_hash[-2:] if pow_hash[-3] > 0 else pow_hash[-3:]
+        h_b = bytes([pow_hash[-3]])
+        print(f'h_b ==> {h_b.hex()}')
+        difficulty = bytes([16])
 
         drain_tx.wit.vtxinwit = [CTxInWitness()]
         drain_tx.wit.vtxinwit[0].scriptWitness.stack = [
-            pubkey, signature, nonce_bytes, h_a, h_b, h_c,
+            pubkey, signature, nonce_bytes, h_a, h_b, difficulty,
             faucat_script, bytes([0xc0 + faucat_tapinfo.negflag]) + bytes.fromhex(H_POINT),
         ]
+        self.generate(wallet, 480)
         self.nodes[0].sendrawtransaction(drain_tx.serialize().hex())
 
 
