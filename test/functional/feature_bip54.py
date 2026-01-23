@@ -408,6 +408,15 @@ class Bip54Test(BitcoinTestFramework):
             txs = [funding_tx, spending_tx]
             txs = [tx.serialize().hex() for tx in txs]
 
+            # for this specific test case, script verification fails due execution of OP_CHECKSIG on
+            # an empty stack, so against that for now; note that wrapping the script around an
+            # OP_0 OP_IF ... OP_ENDIF doesn't help us either, as we would then run into the
+            # MAX_OPS_PER_SCRIPT limit (201 ops)
+            if vector["comment"] == "Bare Script with malformed PUSHDATA2 after counting 2500 BIP54-sigops":
+                assert_raises_rpc_error(-25, "Operation not valid with the current stack size",
+                                        self.generateblock, node, coinbase_descriptor, txs)
+                continue
+
             if vector["valid"]:
                 self.generateblock(node, coinbase_descriptor, txs)
             else:

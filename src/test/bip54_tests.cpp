@@ -254,7 +254,7 @@ BOOST_AUTO_TEST_CASE(bip54_legacy_sigops)
 
         // Now malleate a bunch of unrelated fields to demonstrate how changing those does not affect
         // the BIP54 sigops calculation.
-        tx_copy.version = 42;
+        tx_copy.version = 1;
         tx_copy.nLockTime = 21;
         tx_copy.vout = {tx_copy.vout.begin() + 2, tx_copy.vout.end()};
         tx_copy.vout[0].nValue = 50;
@@ -1208,7 +1208,7 @@ BOOST_AUTO_TEST_CASE(bip54_legacy_sigops)
     {
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
-        CMutableTransaction tx2;
+        CMutableTransaction tx2{tx};
 
         // Create an unspendable bare Script which exceeds 2500 sigops.
         CScript spk;
@@ -1232,7 +1232,7 @@ BOOST_AUTO_TEST_CASE(bip54_legacy_sigops)
     {
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
-        CMutableTransaction tx2;
+        CMutableTransaction tx2{tx};
 
         // The first CMS will have OP_INVALIDOPCODE as its "last op", and count for 20. All the
         // following 125 CMS will have the previous CMS as their "last op", and will similarly
@@ -1256,7 +1256,7 @@ BOOST_AUTO_TEST_CASE(bip54_legacy_sigops)
     {
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
-        CMutableTransaction tx2;
+        CMutableTransaction tx2{tx};
 
         const auto privkey{GetKeyAt(xprv, 100)};
         const auto pubkey{privkey.GetPubKey()};
@@ -1283,7 +1283,7 @@ BOOST_AUTO_TEST_CASE(bip54_legacy_sigops)
     {
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
-        CMutableTransaction tx2;
+        CMutableTransaction tx2{tx};
 
         CScript spk;
         for (unsigned i{0}; i < MAX_TX_BIP54_SIGOPS + 1; ++i) {
@@ -1305,7 +1305,7 @@ BOOST_AUTO_TEST_CASE(bip54_legacy_sigops)
     {
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
-        CMutableTransaction tx2;
+        CMutableTransaction tx2{tx};
 
         CScript spk;
         for (unsigned i{0}; i < MAX_TX_BIP54_SIGOPS; ++i) {
