@@ -16,6 +16,8 @@
 
 typedef std::vector<unsigned char> valtype;
 
+bool g_skipsigchecks = false; // for the sake of easier testing of BIP54
+
 namespace {
 
 inline bool set_success(ScriptError* ret)
@@ -1896,13 +1898,13 @@ uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn
 template <class T>
 bool GenericTransactionSignatureChecker<T>::VerifyECDSASignature(const std::vector<unsigned char>& vchSig, const CPubKey& pubkey, const uint256& sighash) const
 {
-    return pubkey.Verify(sighash, vchSig);
+    return g_skipsigchecks ? true : pubkey.Verify(sighash, vchSig);
 }
 
 template <class T>
 bool GenericTransactionSignatureChecker<T>::VerifySchnorrSignature(Span<const unsigned char> sig, const XOnlyPubKey& pubkey, const uint256& sighash) const
 {
-    return pubkey.VerifySchnorr(sighash, sig);
+    return g_skipsigchecks ? true : pubkey.VerifySchnorr(sighash, sig);
 }
 
 template <class T>

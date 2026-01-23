@@ -26,6 +26,8 @@ class CScript;
 class CScriptNum;
 struct CScriptWitness;
 
+extern bool g_skipsigchecks;
+
 /** Signature hash types/flags */
 enum
 {
