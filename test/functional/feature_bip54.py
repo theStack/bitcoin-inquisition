@@ -3,6 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 # Test Consensus Cleanup soft fork (BIP 54)
+import json
+import os
 
 from test_framework.authproxy import JSONRPCException
 from test_framework.blocktools import (
@@ -15,7 +17,9 @@ from test_framework.messages import (
     COutPoint,
     CTransaction,
     CTxIn,
-    CTxOut
+    CTxOut,
+    from_hex,
+    tx_from_hex,
 )
 from test_framework.script import (
     CScript,
@@ -376,6 +380,39 @@ class Bip54Test(BitcoinTestFramework):
         # - Refuse a block containing a 64-byte transaction
         block_64b = self.mine_block_64byte(node).serialize().hex()
         assert_equal(node.submitblock(block_64b), "bad-txns-size")
+
+        self.log.info("BIP54 sigops limit test vectors")
+        self.restart_node(0, ["-skipsigchecks=1"])
+        # to generate the necessary test vectors file, uncomment the "UPDATE_JSON_TESTS" define in
+        # src/test/bip54_tests.cpp, recompile, and run the unit "bip54_legacy_sigops" unit test, via e.g.
+        # $ ./build/bin/test_bitcoin --run_test=bip54_tests/bip54_legacy_sigops
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../bip54_sigops.json.gen')) as f:
+            vectors = json.load(f)
+        coinbase_descriptor = f"raw({self.wallet.get_output_script().hex()})"
+        for vector in vectors:
+            print(f'Case: "{vector["comment"]}"')
+            funding_tx = self.wallet.create_self_transfer(fee_rate=0)["tx"]
+            funding_tx.vout = [from_hex(CTxOut(), output_hex) for output_hex in vector["spent_outputs"]]
+            funding_tx.rehash()
+            coinbase_spk = self.wallet.get_output_script().hex()
+            spending_tx = tx_from_hex(vector["tx"])
+
+            # patch test vector's tx prevouts to refer to our funding tx outputs
+            # (doing this invalidates the signatures, so running this test only works
+            #  if bitcoind skips signature checks, see the -skipsigchecks option used above)
+            assert len(funding_tx.vout) == len(spending_tx.vin)
+            for i in range(len(spending_tx.vin)):
+                spending_tx.vin[i].prevout.hash = funding_tx.sha256
+                spending_tx.vin[i].prevout.n = i
+
+            txs = [funding_tx, spending_tx]
+            txs = [tx.serialize().hex() for tx in txs]
+
+            if vector["valid"]:
+                self.generateblock(node, coinbase_descriptor, txs)
+            else:
+                assert_raises_rpc_error(-25, "bad-txns-legacy-sigops",
+                                        self.generateblock, node, coinbase_descriptor, txs)
 
 
 if __name__ == "__main__":
