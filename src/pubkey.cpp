@@ -11,7 +11,6 @@
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
 #include <secp256k1_schnorrsig.h>
-#include <secp256k1_hazmat.h>
 #include <span.h>
 #include <uint256.h>
 #include <util/strencodings.h>
@@ -397,22 +396,18 @@ bool CPubKey::ComputeMul(const valtype& scalar, CPubKey& ret) const {
     if (scalar.size() != 32) {
         return false;
     }
-    secp256k1_hazmat_scalar factor;
-    secp256k1_hazmat_scalar_parse(&factor, scalar.data());
-    if (secp256k1_hazmat_scalar_is_zero(&factor)) {
+    unsigned char zero_scalar[32] = {0};
+    if (std::memcmp(scalar.data(), zero_scalar, 32) == 0) {
         /* The mul is Infinity. Set to an empty vector */
         unsigned char empty[1];
         ret.Set(empty, empty);
         return true;
     }
-    unsigned char factor_be[32];
-    std::memcpy(factor_be, factor.data, 32);
-    std::reverse(factor_be, factor_be + 32);
     /* Use point G */
     if (size() == 0) {
         secp256k1_pubkey pubkey;
         /* secp256k1_ec_pubkey_create computes G * tweak */
-        if (!secp256k1_ec_pubkey_create(secp256k1_context_sign, &pubkey, factor_be)) {
+        if (!secp256k1_ec_pubkey_create(secp256k1_context_sign, &pubkey, scalar.data())) {
             return false;
         }
         unsigned char out[COMPRESSED_SIZE];
@@ -425,7 +420,7 @@ bool CPubKey::ComputeMul(const valtype& scalar, CPubKey& ret) const {
     if (!parse_ec_point(&pubkey, vch, size())) {
         return false;
     }
-    if (!secp256k1_ec_pubkey_tweak_mul(secp256k1_context_static, &pubkey, factor_be)) {
+    if (!secp256k1_ec_pubkey_tweak_mul(secp256k1_context_static, &pubkey, scalar.data())) {
         return false;
     }
     unsigned char out[COMPRESSED_SIZE];
